@@ -1,0 +1,29 @@
+seed: 1024
+horizon: 24
+backbone: temporal_transformer
+fast_optimizer:
+  name: adamw
+  lr: 0.001
+  weight_decay: 0.0
+slow_optimizer:
+  name: adamw
+  lr: 3.0e-05
+  weight_decay: 0.0
+drift:
+  window: 168
+  threshold_quantile: 0.99
+  detector: wasserstein
+d3a:
+  candidate_window: 48
+  confirmation_window: 168
+  sensitivity_z: 2.0
+  confirmation_threshold: 0.3
+  cooldown: 12
+memory:
+  enabled: true
+  capacity: 2048
+  top_k: 3
+  similarity: cosine
+adapter:
+  bottleneck_ratio: 0.25
+  fusion_alpha: 0.7
