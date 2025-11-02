@@ -2,3 +2,4 @@
 
 from .online_loop import OnlineTrainer  # noqa: F401
 from .replay import ReplayBuffer  # noqa: F401
+from .early_stopping import EarlyStopping  # noqa: F401

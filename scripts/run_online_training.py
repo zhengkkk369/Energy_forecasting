@@ -5,6 +5,7 @@ from pathlib import Path
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
+from torch.optim.lr_scheduler import CosineAnnealingLR, ReduceLROnPlateau, StepLR
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -15,8 +16,8 @@ if str(SRC_ROOT) not in sys.path:
 
 from data.data_loader import Dataset_ETT_hour, Dataset_ETT_minute, Dataset_Custom  # noqa: E402
 from energy_forecasting.models.baseline import BaselineConfig  # noqa: E402
+from energy_forecasting.training.early_stopping import EarlyStopping  # noqa: E402
 from energy_forecasting.utils.logging import create_logger  # noqa: E402
-
 
 DATASET_REGISTRY = {
     "ETTh1": (Dataset_ETT_hour, {"data_path": "ETTh1.csv", "freq": "h", "target": "OT"}),
@@ -51,6 +52,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pooling", default="last", choices=["last", "mean"], help="Transformer pooling strategy.")
     parser.add_argument("--tcn-levels", default=4, type=int, help="Only used for TCN.")
     parser.add_argument("--kernel-size", default=3, type=int, help="Only used for TCN.")
+    parser.add_argument("--scheduler", default="none", choices=["none", "step", "cosine", "plateau"])
+    parser.add_argument("--scheduler-step-size", default=5, type=int, help="Step size for StepLR scheduler.")
+    parser.add_argument("--scheduler-gamma", default=0.5, type=float, help="Gamma for StepLR or ReduceLROnPlateau.")
+    parser.add_argument("--scheduler-t-max", default=10, type=int, help="T_max for CosineAnnealingLR.")
+    parser.add_argument(
+        "--scheduler-min-lr",
+        default=1e-6,
+        type=float,
+        help="Minimum learning rate for cosine scheduler.",
+    )
+    parser.add_argument(
+        "--early-stopping-patience",
+        default=0,
+        type=int,
+        help="Enable early stopping when >0 and sets patience in epochs.",
+    )
+    parser.add_argument(
+        "--early-stopping-min-delta",
+        default=0.0,
+        type=float,
+        help="Minimum decrease in validation loss to reset early stopping patience.",
+    )
     return parser.parse_args()
 
 
@@ -138,6 +161,26 @@ def evaluate(model, loader, criterion, device, pred_len):
     return total_loss / denom, total_mae / denom
 
 
+def build_scheduler(optimizer: torch.optim.Optimizer, args: argparse.Namespace):
+    if args.scheduler == "none":
+        return None
+    if args.scheduler == "step":
+        return StepLR(optimizer, step_size=args.scheduler_step_size, gamma=args.scheduler_gamma)
+    if args.scheduler == "cosine":
+        return CosineAnnealingLR(
+            optimizer,
+            T_max=args.scheduler_t_max,
+            eta_min=args.scheduler_min_lr,
+        )
+    if args.scheduler == "plateau":
+        return ReduceLROnPlateau(
+            optimizer,
+            factor=args.scheduler_gamma,
+            patience=max(1, args.scheduler_step_size),
+        )
+    raise ValueError(f"Unknown scheduler: {args.scheduler}")
+
+
 def main() -> None:
     args = parse_args()
     logger = create_logger("baseline-training")
@@ -172,6 +215,12 @@ def main() -> None:
     model = model_config.build().to(args.device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
     criterion = nn.MSELoss()
+    scheduler = build_scheduler(optimizer, args)
+    early_stopper = (
+        EarlyStopping(patience=args.early_stopping_patience, min_delta=args.early_stopping_min_delta)
+        if args.early_stopping_patience > 0
+        else None
+    )
 
     logger.info(
         "Starting training | dataset=%s | model=%s | seq_len=%d | pred_len=%d | device=%s",
@@ -198,6 +247,15 @@ def main() -> None:
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_state = model.state_dict()
+        if scheduler is not None:
+            if isinstance(scheduler, ReduceLROnPlateau):
+                scheduler.step(val_loss)
+            else:
+                scheduler.step()
+            logger.info("Learning rate now %.6f", optimizer.param_groups[0]["lr"])
+        if early_stopper is not None and early_stopper.step(val_loss):
+            logger.info("Early stopping triggered after %d epochs without improvement.", early_stopper.patience)
+            break
 
     if best_state is not None:
         model.load_state_dict(best_state)

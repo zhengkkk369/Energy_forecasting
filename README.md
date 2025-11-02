@@ -19,4 +19,5 @@ Use `scripts/run_online_training.py` as the main entry point for experimentation
   python scripts/run_online_training.py --dataset ETTh1 --model lstm --epochs 1 --batch-size 16 --device cpu
   ```
 - Switch model families with `--model` (`lstm`, `tcn`, `transformer`) and adjust hyperparameters such as `--hidden-dim`, `--tcn-levels`, or `--num-heads` to explore architecture variants.
+- Optional training utilities: enable schedulers (`--scheduler step|cosine|plateau`) and early stopping (`--early-stopping-patience`, `--early-stopping-min-delta`) for longer runs.
 - Logs report training/validation curves and final test MAE for the configured forecaster.
