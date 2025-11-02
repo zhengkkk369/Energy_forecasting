@@ -5,7 +5,6 @@ from typing import Dict, Iterator, Optional, Tuple
 
 import numpy as np
 
-
 @dataclass
 class StreamBatch:
     features: np.ndarray
@@ -15,12 +14,18 @@ class StreamBatch:
 
 
 class DataStream:
-    """Simulates online data access with optional label delays."""
+    """Simulates online data access with optional label delays and drift injection."""
 
-    def __init__(self, horizon: int, lag: int = 0) -> None:
+    def __init__(
+        self,
+        horizon: int,
+        lag: int = 0,
+        drift_injector: Optional[object] = None,
+    ) -> None:
         self.horizon = horizon
         self.lag = lag
         self._cursor = 0
+        self.drift_injector = drift_injector
 
     def __iter__(self) -> Iterator[StreamBatch]:
         return self
@@ -44,7 +49,10 @@ class DataStream:
             "mask": np.random.choice([0, 1], size=(1, self.horizon, 1)),
         }
         target = None if step < self.lag else np.random.randn(1, self.horizon, 1)
-        return StreamBatch(features=features, context=context, target=target, timestamp=step)
+        batch = StreamBatch(features=features, context=context, target=target, timestamp=step)
+        if self.drift_injector is not None:
+            batch = self.drift_injector.apply(step, batch)
+        return batch
 
     def _max_steps(self) -> int:
         """Placeholder stream length."""
