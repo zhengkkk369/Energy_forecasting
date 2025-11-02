@@ -1,9 +1,11 @@
 import argparse
+import copy
 import sys
 from pathlib import Path
 
 import torch
 from torch import nn
+from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR, ReduceLROnPlateau, StepLR
 
@@ -17,6 +19,8 @@ if str(SRC_ROOT) not in sys.path:
 from data.data_loader import Dataset_ETT_hour, Dataset_ETT_minute, Dataset_Custom  # noqa: E402
 from energy_forecasting.models.baseline import BaselineConfig  # noqa: E402
 from energy_forecasting.training.early_stopping import EarlyStopping  # noqa: E402
+from energy_forecasting.training.ema import ModelEMA  # noqa: E402
+from energy_forecasting.training.lr_utils import WarmupScheduler  # noqa: E402
 from energy_forecasting.utils.logging import create_logger  # noqa: E402
 
 DATASET_REGISTRY = {
@@ -62,6 +66,13 @@ def parse_args() -> argparse.Namespace:
         type=float,
         help="Minimum learning rate for cosine scheduler.",
     )
+    parser.add_argument("--warmup-epochs", default=0, type=int, help="Number of warmup epochs before scheduler kicks in.")
+    parser.add_argument(
+        "--warmup-start-factor",
+        default=0.1,
+        type=float,
+        help="Initial learning rate factor during warmup (relative to base lr).",
+    )
     parser.add_argument(
         "--early-stopping-patience",
         default=0,
@@ -73,6 +84,18 @@ def parse_args() -> argparse.Namespace:
         default=0.0,
         type=float,
         help="Minimum decrease in validation loss to reset early stopping patience.",
+    )
+    parser.add_argument(
+        "--grad-clip-norm",
+        default=0.0,
+        type=float,
+        help="If >0, clip gradient norm to this value during training.",
+    )
+    parser.add_argument(
+        "--ema-decay",
+        default=0.0,
+        type=float,
+        help="If >0, maintain an exponential moving average of model weights for evaluation.",
     )
     return parser.parse_args()
 
@@ -116,7 +139,7 @@ def build_dataloaders(args: argparse.Namespace):
     return train_dataset, val_dataset, test_dataset, train_loader, val_loader, test_loader
 
 
-def train_epoch(model, loader, optimizer, criterion, device, pred_len):
+def train_epoch(model, loader, optimizer, criterion, device, pred_len, grad_clip_norm=None, ema=None):
     model.train()
     total_loss = 0.0
     total_samples = 0
@@ -129,7 +152,11 @@ def train_epoch(model, loader, optimizer, criterion, device, pred_len):
         output = model(seq_x)
         loss = criterion(output, target)
         loss.backward()
+        if grad_clip_norm and grad_clip_norm > 0.0:
+            clip_grad_norm_(model.parameters(), grad_clip_norm)
         optimizer.step()
+        if ema is not None:
+            ema.update(model)
 
         batch_size = seq_x.size(0)
         total_loss += loss.item() * batch_size
@@ -138,8 +165,12 @@ def train_epoch(model, loader, optimizer, criterion, device, pred_len):
 
 
 @torch.no_grad()
-def evaluate(model, loader, criterion, device, pred_len):
+def evaluate(model, loader, criterion, device, pred_len, ema=None):
     model.eval()
+    ema_applied = False
+    if ema is not None:
+        ema.apply_shadow(model)
+        ema_applied = True
     total_loss = 0.0
     total_mae = 0.0
     total_samples = 0
@@ -157,28 +188,50 @@ def evaluate(model, loader, criterion, device, pred_len):
         total_mae += mae.item() * batch_size
         total_samples += batch_size
 
+    if ema_applied:
+        ema.restore(model)
     denom = max(total_samples, 1)
     return total_loss / denom, total_mae / denom
 
 
 def build_scheduler(optimizer: torch.optim.Optimizer, args: argparse.Namespace):
-    if args.scheduler == "none":
-        return None
+    scheduler = None
     if args.scheduler == "step":
-        return StepLR(optimizer, step_size=args.scheduler_step_size, gamma=args.scheduler_gamma)
-    if args.scheduler == "cosine":
-        return CosineAnnealingLR(
+        scheduler = StepLR(optimizer, step_size=args.scheduler_step_size, gamma=args.scheduler_gamma)
+    elif args.scheduler == "cosine":
+        scheduler = CosineAnnealingLR(
             optimizer,
             T_max=args.scheduler_t_max,
             eta_min=args.scheduler_min_lr,
         )
-    if args.scheduler == "plateau":
-        return ReduceLROnPlateau(
+    elif args.scheduler == "plateau":
+        scheduler = ReduceLROnPlateau(
             optimizer,
             factor=args.scheduler_gamma,
             patience=max(1, args.scheduler_step_size),
         )
-    raise ValueError(f"Unknown scheduler: {args.scheduler}")
+    elif args.scheduler != "none":
+        raise ValueError(f"Unknown scheduler: {args.scheduler}")
+
+    if args.warmup_epochs > 0:
+        scheduler = WarmupScheduler(
+            optimizer,
+            warmup_epochs=args.warmup_epochs,
+            start_factor=args.warmup_start_factor,
+            after_scheduler=scheduler,
+        )
+    return scheduler
+
+
+def step_scheduler(scheduler, val_loss: float | None) -> None:
+    if scheduler is None:
+        return
+    if isinstance(scheduler, WarmupScheduler):
+        scheduler.step(val_loss)
+    elif isinstance(scheduler, ReduceLROnPlateau):
+        scheduler.step(val_loss)
+    else:
+        scheduler.step()
 
 
 def main() -> None:
@@ -216,6 +269,9 @@ def main() -> None:
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
     criterion = nn.MSELoss()
     scheduler = build_scheduler(optimizer, args)
+    ema = None
+    if 0.0 < args.ema_decay < 1.0:
+        ema = ModelEMA(model, decay=args.ema_decay)
     early_stopper = (
         EarlyStopping(patience=args.early_stopping_patience, min_delta=args.early_stopping_min_delta)
         if args.early_stopping_patience > 0
@@ -233,10 +289,27 @@ def main() -> None:
 
     best_val_loss = float("inf")
     best_state = None
+    best_state_from_ema = False
 
     for epoch in range(1, args.epochs + 1):
-        train_loss = train_epoch(model, train_loader, optimizer, criterion, args.device, args.pred_len)
-        val_loss, val_mae = evaluate(model, val_loader, criterion, args.device, args.pred_len)
+        train_loss = train_epoch(
+            model,
+            train_loader,
+            optimizer,
+            criterion,
+            args.device,
+            args.pred_len,
+            grad_clip_norm=args.grad_clip_norm,
+            ema=ema,
+        )
+        val_loss, val_mae = evaluate(
+            model,
+            val_loader,
+            criterion,
+            args.device,
+            args.pred_len,
+            ema=ema,
+        )
         logger.info(
             "Epoch %02d | train_loss=%.4f | val_loss=%.4f | val_mae=%.4f",
             epoch,
@@ -246,19 +319,25 @@ def main() -> None:
         )
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            best_state = model.state_dict()
-        if scheduler is not None:
-            if isinstance(scheduler, ReduceLROnPlateau):
-                scheduler.step(val_loss)
+            if ema is not None:
+                best_state = ema.state_dict()
+                best_state_from_ema = True
             else:
-                scheduler.step()
+                best_state = copy.deepcopy(model.state_dict())
+                best_state_from_ema = False
+        previous_lr = optimizer.param_groups[0]["lr"]
+        step_scheduler(scheduler, val_loss)
+        if scheduler is not None and optimizer.param_groups[0]["lr"] != previous_lr:
             logger.info("Learning rate now %.6f", optimizer.param_groups[0]["lr"])
         if early_stopper is not None and early_stopper.step(val_loss):
             logger.info("Early stopping triggered after %d epochs without improvement.", early_stopper.patience)
             break
 
     if best_state is not None:
-        model.load_state_dict(best_state)
+        if best_state_from_ema:
+            model.load_state_dict(best_state, strict=False)
+        else:
+            model.load_state_dict(best_state)
     test_loss, test_mae = evaluate(model, test_loader, criterion, args.device, args.pred_len)
     logger.info("Test metrics | loss=%.4f | mae=%.4f", test_loss, test_mae)
 

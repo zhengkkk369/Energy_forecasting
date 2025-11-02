@@ -20,4 +20,5 @@ Use `scripts/run_online_training.py` as the main entry point for experimentation
   ```
 - Switch model families with `--model` (`lstm`, `tcn`, `transformer`) and adjust hyperparameters such as `--hidden-dim`, `--tcn-levels`, or `--num-heads` to explore architecture variants.
 - Optional training utilities: enable schedulers (`--scheduler step|cosine|plateau`) and early stopping (`--early-stopping-patience`, `--early-stopping-min-delta`) for longer runs.
+- Accuracy helpers: leverage warmup (`--warmup-epochs`, `--warmup-start-factor`), gradient clipping (`--grad-clip-norm`), and EMA averaging (`--ema-decay`) to stabilise training.
 - Logs report training/validation curves and final test MAE for the configured forecaster.
