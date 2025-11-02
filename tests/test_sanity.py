@@ -16,12 +16,26 @@ def test_default_config() -> None:
 
 
 def test_baseline_config_variants() -> None:
-    for model_type in ("lstm", "tcn", "transformer"):
+    model_types = (
+        "lstm",
+        "tcn",
+        "transformer",
+        "ts2vec",
+        "autoformer",
+        "dlinear",
+        "informer",
+        "patchtst",
+        "fedformer",
+    )
+    for model_type in model_types:
         cfg = BaselineConfig(
             input_dim=8,
             output_dim=1,
             pred_len=24,
             model_type=model_type,
+            seq_len=96,
+            patch_len=16,
+            freq_top_k=8,
         )
         model = cfg.build()
         dummy_input = torch.randn(2, 96, 8)

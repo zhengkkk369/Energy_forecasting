@@ -46,7 +46,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", default=1e-3, type=float)
     parser.add_argument("--num-workers", default=2, type=int)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--model", default="lstm", choices=["lstm", "tcn", "transformer"])
+    parser.add_argument(
+        "--model",
+        default="lstm",
+        choices=[
+            "lstm",
+            "tcn",
+            "transformer",
+            "ts2vec",
+            "autoformer",
+            "dlinear",
+            "informer",
+            "patchtst",
+            "fedformer",
+        ],
+    )
     parser.add_argument("--hidden-dim", default=128, type=int)
     parser.add_argument("--num-layers", default=2, type=int)
     parser.add_argument("--dropout", default=0.1, type=float)
@@ -56,6 +70,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pooling", default="last", choices=["last", "mean"], help="Transformer pooling strategy.")
     parser.add_argument("--tcn-levels", default=4, type=int, help="Only used for TCN.")
     parser.add_argument("--kernel-size", default=3, type=int, help="Only used for TCN.")
+    parser.add_argument("--patch-len", default=16, type=int, help="Patch length for PatchTST.")
+    parser.add_argument("--freq-top-k", default=16, type=int, help="Top frequency components for FEDformer.")
+    parser.add_argument("--rep-dim", default=128, type=int, help="Representation dimension for TS2Vec.")
     parser.add_argument("--scheduler", default="none", choices=["none", "step", "cosine", "plateau"])
     parser.add_argument("--scheduler-step-size", default=5, type=int, help="Step size for StepLR scheduler.")
     parser.add_argument("--scheduler-gamma", default=0.5, type=float, help="Gamma for StepLR or ReduceLROnPlateau.")
@@ -264,6 +281,10 @@ def main() -> None:
         pooling=args.pooling,
         tcn_levels=args.tcn_levels,
         kernel_size=args.kernel_size,
+        seq_len=args.seq_len,
+        patch_len=args.patch_len,
+        freq_top_k=args.freq_top_k,
+        rep_dim=args.rep_dim,
     )
     model = model_config.build().to(args.device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
