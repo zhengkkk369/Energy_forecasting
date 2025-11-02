@@ -16,6 +16,7 @@ Use `scripts/run_online_training.py` as the main entry point for experimentation
 - Place the raw CSV datasets under the `data/` directory (already includes ETT/ECL/WTH samples).
 - Execute a baseline run (CPU example):
   ```
-  python scripts/run_online_training.py --dataset ETTh1 --epochs 1 --batch-size 16 --device cpu
+  python scripts/run_online_training.py --dataset ETTh1 --model lstm --epochs 1 --batch-size 16 --device cpu
   ```
-- Logs report training/validation curves and final test MAE for the simple LSTM forecaster.
+- Switch model families with `--model` (`lstm`, `tcn`, `transformer`) and adjust hyperparameters such as `--hidden-dim`, `--tcn-levels`, or `--num-heads` to explore architecture variants.
+- Logs report training/validation curves and final test MAE for the configured forecaster.

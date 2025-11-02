@@ -29,7 +29,7 @@ DATASET_REGISTRY = {
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train baseline LSTM forecaster on energy datasets.")
+    parser = argparse.ArgumentParser(description="Train baseline forecasters (LSTM/TCN/Transformer) on energy datasets.")
     parser.add_argument("--data-root", default="data", type=str, help="Directory containing CSV datasets.")
     parser.add_argument("--dataset", default="ETTh1", choices=DATASET_REGISTRY.keys())
     parser.add_argument("--features", default="M", choices=["S", "M", "MS"])
@@ -41,6 +41,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", default=1e-3, type=float)
     parser.add_argument("--num-workers", default=2, type=int)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--model", default="lstm", choices=["lstm", "tcn", "transformer"])
+    parser.add_argument("--hidden-dim", default=128, type=int)
+    parser.add_argument("--num-layers", default=2, type=int)
+    parser.add_argument("--dropout", default=0.1, type=float)
+    parser.add_argument("--num-heads", default=4, type=int, help="Only used for transformer.")
+    parser.add_argument("--d-model", default=128, type=int, help="Only used for transformer.")
+    parser.add_argument("--ff-dim", default=256, type=int, help="Only used for transformer.")
+    parser.add_argument("--pooling", default="last", choices=["last", "mean"], help="Transformer pooling strategy.")
+    parser.add_argument("--tcn-levels", default=4, type=int, help="Only used for TCN.")
+    parser.add_argument("--kernel-size", default=3, type=int, help="Only used for TCN.")
     return parser.parse_args()
 
 
@@ -148,14 +158,25 @@ def main() -> None:
         input_dim=input_dim,
         output_dim=output_dim,
         pred_len=args.pred_len,
+        model_type=args.model,
+        hidden_dim=args.hidden_dim,
+        num_layers=args.num_layers,
+        dropout=args.dropout,
+        num_heads=args.num_heads,
+        d_model=args.d_model,
+        ff_dim=args.ff_dim,
+        pooling=args.pooling,
+        tcn_levels=args.tcn_levels,
+        kernel_size=args.kernel_size,
     )
     model = model_config.build().to(args.device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
     criterion = nn.MSELoss()
 
     logger.info(
-        "Starting training | dataset=%s | seq_len=%d | pred_len=%d | device=%s",
+        "Starting training | dataset=%s | model=%s | seq_len=%d | pred_len=%d | device=%s",
         args.dataset,
+        args.model,
         args.seq_len,
         args.pred_len,
         args.device,
