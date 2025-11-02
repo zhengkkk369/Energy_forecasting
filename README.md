@@ -10,3 +10,12 @@ Implements placeholders for data streaming, adaptive modeling, drift detection, 
 - **Adaptive scheduling hooks**: drift strength from D3A feeds the adaptation scheduler for gradual vs. abrupt responses.
 
 Use `scripts/run_online_training.py` as the main entry point for experimentation.
+
+## Running the Baseline Experiment
+
+- Place the raw CSV datasets under the `data/` directory (already includes ETT/ECL/WTH samples).
+- Execute a baseline run (CPU example):
+  ```
+  python scripts/run_online_training.py --dataset ETTh1 --epochs 1 --batch-size 16 --device cpu
+  ```
+- Logs report training/validation curves and final test MAE for the simple LSTM forecaster.

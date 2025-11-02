@@ -5,3 +5,4 @@ from .adapters import LayerAdapter  # noqa: F401
 from .film import FiLMConditioner  # noqa: F401
 from .memory import AdapterMemory  # noqa: F401
 from .fusion import AdapterFusion  # noqa: F401
+from .baseline import LSTMForecaster, BaselineConfig  # noqa: F401
