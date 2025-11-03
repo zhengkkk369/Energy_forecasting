@@ -19,14 +19,14 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.append(str(SRC_ROOT))
 
 from data.data_loader import Dataset_Custom, Dataset_ETT_hour, Dataset_ETT_minute  # noqa: E402
-from src.energy_forecasting.config import ProjectConfig  # noqa: E402
 from src.energy_forecasting.data import DriftConfig, DriftInjector, StreamBatch  # noqa: E402
-from src.energy_forecasting.drift.d3a import D3AController  # noqa: E402
 from src.energy_forecasting.models import BaselineConfig  # noqa: E402
 from src.energy_forecasting.training.ema import ModelEMA  # noqa: E402
 from src.energy_forecasting.training.lr_utils import WarmupScheduler  # noqa: E402
 from src.energy_forecasting.training.replay import ReplayBuffer  # noqa: E402
 from src.energy_forecasting.utils import metric as calc_metric  # noqa: E402
+from src.energy_forecasting.utils.detector import STEPD  # noqa: E402
+from src.energy_forecasting.utils.buffer import Buffer  # noqa: E402
 from src.energy_forecasting.utils.logging import create_logger  # noqa: E402
 
 DATASET_REGISTRY = {
@@ -97,7 +97,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--drift-config", default=None, type=str, help="JSON file describing drift schedules.")
     parser.add_argument("--replay-size", default=0, type=int, help="Replay buffer capacity (0 disables).")
     parser.add_argument("--replay-sample", default=4, type=int, help="Replay samples per update.")
-    parser.add_argument("--use-d3a", action="store_true", help="Enable detect-then-adapt controller.")
+    parser.add_argument("--use-d3a", dest="use_d3a", action="store_true", help="Enable detect-then-adapt controller.")
+    parser.add_argument("--d3a-window", default=168, type=int, help="Sliding window size for STEPD detector.")
+    parser.add_argument("--d3a-alpha-w", default=0.05, type=float, help="Warning threshold for STEPD.")
+    parser.add_argument("--d3a-alpha-d", default=0.003, type=float, help="Drift threshold for STEPD.")
+    parser.add_argument("--d3a-min-lr", default=1e-4, type=float, help="Minimum LR when STEPD adapts learning rate.")
+    parser.add_argument("--d3a-max-lr", default=3e-3, type=float, help="Maximum LR when STEPD adapts learning rate.")
     return parser.parse_args()
 
 
@@ -280,21 +285,36 @@ def main() -> None:
     scheduler = build_scheduler(optimizer, args)
     ema = ModelEMA(model, decay=args.ema_decay) if 0.0 < args.ema_decay < 1.0 else None
     criterion = nn.MSELoss()
-    replay_buffer = ReplayBuffer(capacity=args.replay_size) if args.replay_size > 0 else None
-    if replay_buffer is not None:
-        logger.info("Replay buffer enabled with capacity=%d and sample=%d.", args.replay_size, args.replay_sample)
-
     if args.use_d3a:
-        project_cfg = ProjectConfig()
-        d3a_controller = D3AController(project_cfg.d3a)
-        logger.info(
-            "D3A controller enabled | window=%d | candidate=%d | cooldown=%d",
-            project_cfg.d3a.confirmation_window,
-            project_cfg.d3a.candidate_window,
-            project_cfg.d3a.cooldown,
+        detector = STEPD(
+            new_window_size=args.d3a_window,
+            alpha_w=args.d3a_alpha_w,
+            alpha_d=args.d3a_alpha_d,
         )
+        d3a_buffer = (
+            Buffer(
+                buffer_size=args.replay_size if args.replay_size > 0 else args.d3a_window,
+                device=device,
+                mode="fifo",
+            )
+            if args.replay_size > 0
+            else None
+        )
+        replay_buffer = None
+        logger.info(
+            "STEPD detector enabled | window=%d | alpha_w=%.4f | alpha_d=%.4f",
+            args.d3a_window,
+            args.d3a_alpha_w,
+            args.d3a_alpha_d,
+        )
+        if d3a_buffer is not None:
+            logger.info("Using rehearsal buffer (capacity=%d) with STEPD.", args.replay_size if args.replay_size > 0 else args.d3a_window)
     else:
-        d3a_controller = None
+        detector = None
+        d3a_buffer = None
+        replay_buffer = ReplayBuffer(capacity=args.replay_size) if args.replay_size > 0 else None
+        if replay_buffer is not None:
+            logger.info("Replay buffer enabled with capacity=%d and sample=%d.", args.replay_size, args.replay_sample)
 
     logger.info(
         "Starting OneNet-style online loop | dataset=%s | model=%s | total_steps=%d",
@@ -312,10 +332,8 @@ def main() -> None:
         if step >= args.max_steps:
             break
 
-        instruction = None
-        if d3a_controller is not None:
-            representation = seq_x.detach().cpu().mean(dim=0).numpy().flatten()
-            signal, instruction = d3a_controller.assess(representation)
+        drift_flag = 0
+        suggested_lr = None
 
         model.eval()
         with torch.no_grad():
@@ -335,23 +353,32 @@ def main() -> None:
             metrics["rmse"].append(rmse)
             metrics["mape"].append(mape)
             metrics["mspe"].append(mspe)
-            if replay_buffer is not None:
-                store_allowed = instruction.store_state if instruction is not None else True
-                if store_allowed:
-                    replay_buffer.push(
-                        StreamBatch(
-                            features=seq_np.astype(np.float32),
-                            context={},
-                            target=target_np.astype(np.float32),
-                            timestamp=step,
-                        )
+            if args.use_d3a and detector is not None:
+                error_rate = float(np.mean(np.abs(pred_np - target_np)))
+                detector.add_data(error_rate, seq_x.detach().cpu())
+                drift_flag, suggested_lr = detector.run_test()
+                if suggested_lr is not None:
+                    lr_new = float(np.clip(suggested_lr, args.d3a_min_lr, args.d3a_max_lr))
+                    for group in optimizer.param_groups:
+                        group["lr"] = lr_new
+                if drift_flag:
+                    detector.reset()
+                    logger.info("STEPD drift detected at step=%d | suggested_lr=%s", step, f"{suggested_lr:.5f}" if suggested_lr is not None else "n/a")
+            if args.use_d3a and d3a_buffer is not None:
+                d3a_buffer.add_data(
+                    examples=seq_x.detach(),
+                    labels=target.detach(),
+                    logits=None,
+                    task_labels=None,
+                )
+            elif replay_buffer is not None:
+                replay_buffer.push(
+                    StreamBatch(
+                        features=seq_np.astype(np.float32),
+                        context={},
+                        target=target_np.astype(np.float32),
+                        timestamp=step,
                     )
-            if instruction is not None and instruction.trigger_adaptation:
-                logger.info(
-                    "D3A trigger at step=%d | strength=%.4f | type=%s",
-                    step,
-                    instruction.drift_strength,
-                    instruction.drift_type,
                 )
             if mae < best_mae:
                 best_mae = mae
@@ -365,15 +392,23 @@ def main() -> None:
         should_update = (
             step >= args.pretrain_steps and (step - args.pretrain_steps) % max(args.update_interval, 1) == 0
         )
-        if d3a_controller is not None and instruction is not None:
-            should_update = should_update and instruction.trigger_adaptation
+        if args.use_d3a and drift_flag == 1:
+            should_update = True
 
         if should_update and target is not None:
             model.train()
             optimizer.zero_grad()
             seq_batch = seq_x
             target_batch = target
-            if replay_buffer is not None and args.replay_sample > 0:
+            if args.use_d3a and d3a_buffer is not None and args.replay_sample > 0 and not d3a_buffer.is_empty():
+                samples = d3a_buffer.get_data(args.replay_sample)
+                if samples:
+                    examples = samples[0]
+                    labels = samples[1] if len(samples) > 1 else None
+                    if labels is not None:
+                        seq_batch = torch.cat([seq_batch, examples], dim=0)
+                        target_batch = torch.cat([target_batch, labels], dim=0)
+            elif replay_buffer is not None and args.replay_sample > 0:
                 samples = replay_buffer.sample(args.replay_sample)
                 replay_feats = []
                 replay_targets = []
