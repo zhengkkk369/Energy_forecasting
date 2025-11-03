@@ -19,13 +19,13 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.append(str(SRC_ROOT))
 
 from data.data_loader import Dataset_Custom, Dataset_ETT_hour, Dataset_ETT_minute  # noqa: E402
-from energy_forecasting.data import DriftConfig, DriftInjector, StreamBatch  # noqa: E402
-from energy_forecasting.models import BaselineConfig  # noqa: E402
-from energy_forecasting.training.ema import ModelEMA  # noqa: E402
-from energy_forecasting.training.lr_utils import WarmupScheduler  # noqa: E402
-from energy_forecasting.training.replay import ReplayBuffer  # noqa: E402
-from energy_forecasting.utils import cumavg, metric as calc_metric  # noqa: E402
-from energy_forecasting.utils.logging import create_logger  # noqa: E402
+from src.energy_forecasting.data import DriftConfig, DriftInjector, StreamBatch  # noqa: E402
+from src.energy_forecasting.models import BaselineConfig  # noqa: E402
+from src.energy_forecasting.training.ema import ModelEMA  # noqa: E402
+from src.energy_forecasting.training.lr_utils import WarmupScheduler  # noqa: E402
+from src.energy_forecasting.training.replay import ReplayBuffer  # noqa: E402
+from src.energy_forecasting.utils import cumavg, metric as calc_metric  # noqa: E402
+from src.energy_forecasting.utils.logging import create_logger  # noqa: E402
 
 DATASET_REGISTRY = {
     "ETTh1": (Dataset_ETT_hour, {"data_path": "ETTh1.csv", "freq": "h", "target": "OT"}),
