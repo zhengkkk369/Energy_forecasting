@@ -38,7 +38,7 @@ class PatchTSTForecaster(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch, seq_len, feat = x.shape
-        trimmed = x[:, -self.patches * self.patch_len :]
+        trimmed = x[:, -self.patches * self.patch_len :].contiguous()
         patches = trimmed.view(batch, self.patches, self.patch_len * feat)
         tokens = self.input_proj(patches)
         encoded = self.encoder(tokens)

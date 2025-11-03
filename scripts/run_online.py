@@ -77,7 +77,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--freq-top-k", default=16, type=int)
     parser.add_argument("--rep-dim", default=128, type=int)
 
-    parser.add_argument("--scheduler", default="none", choices=["none", "step", "cosine", "plateau"])
+    parser.add_argument("--scheduler", default="cosine", choices=["none", "step", "cosine", "plateau"])
     parser.add_argument("--scheduler-step-size", default=200, type=int)
     parser.add_argument("--scheduler-gamma", default=0.7, type=float)
     parser.add_argument("--scheduler-t-max", default=500, type=int)
