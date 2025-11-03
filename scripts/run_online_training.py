@@ -17,7 +17,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.append(str(SRC_ROOT))
 
 from data.data_loader import Dataset_ETT_hour, Dataset_ETT_minute, Dataset_Custom  # noqa: E402
-from energy_forecasting.models.baseline import BaselineConfig  # noqa: E402
+from energy_forecasting.models import BaselineConfig  # noqa: E402
 from energy_forecasting.training.early_stopping import EarlyStopping  # noqa: E402
 from energy_forecasting.training.ema import ModelEMA  # noqa: E402
 from energy_forecasting.training.lr_utils import WarmupScheduler  # noqa: E402

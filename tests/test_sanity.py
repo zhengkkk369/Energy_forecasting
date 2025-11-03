@@ -2,7 +2,7 @@ import pytest
 import torch
 
 from energy_forecasting.config import ProjectConfig
-from energy_forecasting.models.baseline import BaselineConfig
+from energy_forecasting.models import BaselineConfig
 from energy_forecasting.training.early_stopping import EarlyStopping
 from energy_forecasting.training.ema import ModelEMA
 from energy_forecasting.training.lr_utils import WarmupScheduler
