@@ -28,7 +28,7 @@ Use `scripts/run_online_training.py` as the main entry point for experimentation
 Use `energy_forecasting.data.drift_injector.DriftInjector` to inject abrupt, periodic, or gradual shifts into the online stream:
 
 ```python
-from energy_forecasting.data import DataStream, DriftInjector, DriftConfig
+from src.energy_forecasting.data import DataStream, DriftInjector, DriftConfig
 
 injector = DriftInjector([
     DriftConfig(drift_type="abrupt", start=200, magnitude=1.5),

@@ -1,7 +1,7 @@
 import numpy as np
 
-from energy_forecasting.data.datastream import StreamBatch
-from energy_forecasting.data.drift_injector import DriftConfig, DriftInjector
+from src.energy_forecasting.data.datastream import StreamBatch
+from src.energy_forecasting.data.drift_injector import DriftConfig, DriftInjector
 
 
 def make_batch(value: float = 0.0) -> StreamBatch:

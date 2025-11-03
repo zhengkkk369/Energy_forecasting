@@ -19,12 +19,14 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.append(str(SRC_ROOT))
 
 from data.data_loader import Dataset_Custom, Dataset_ETT_hour, Dataset_ETT_minute  # noqa: E402
+from src.energy_forecasting.config import ProjectConfig  # noqa: E402
 from src.energy_forecasting.data import DriftConfig, DriftInjector, StreamBatch  # noqa: E402
+from src.energy_forecasting.drift.d3a import D3AController  # noqa: E402
 from src.energy_forecasting.models import BaselineConfig  # noqa: E402
 from src.energy_forecasting.training.ema import ModelEMA  # noqa: E402
 from src.energy_forecasting.training.lr_utils import WarmupScheduler  # noqa: E402
 from src.energy_forecasting.training.replay import ReplayBuffer  # noqa: E402
-from src.energy_forecasting.utils import cumavg, metric as calc_metric  # noqa: E402
+from src.energy_forecasting.utils import metric as calc_metric  # noqa: E402
 from src.energy_forecasting.utils.logging import create_logger  # noqa: E402
 
 DATASET_REGISTRY = {
@@ -95,6 +97,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--drift-config", default=None, type=str, help="JSON file describing drift schedules.")
     parser.add_argument("--replay-size", default=0, type=int, help="Replay buffer capacity (0 disables).")
     parser.add_argument("--replay-sample", default=4, type=int, help="Replay samples per update.")
+    parser.add_argument("--use-d3a", action="store_true", help="Enable detect-then-adapt controller.")
     return parser.parse_args()
 
 
@@ -281,6 +284,18 @@ def main() -> None:
     if replay_buffer is not None:
         logger.info("Replay buffer enabled with capacity=%d and sample=%d.", args.replay_size, args.replay_sample)
 
+    if args.use_d3a:
+        project_cfg = ProjectConfig()
+        d3a_controller = D3AController(project_cfg.d3a)
+        logger.info(
+            "D3A controller enabled | window=%d | candidate=%d | cooldown=%d",
+            project_cfg.d3a.confirmation_window,
+            project_cfg.d3a.candidate_window,
+            project_cfg.d3a.cooldown,
+        )
+    else:
+        d3a_controller = None
+
     logger.info(
         "Starting OneNet-style online loop | dataset=%s | model=%s | total_steps=%d",
         args.dataset,
@@ -296,6 +311,11 @@ def main() -> None:
     for step, seq_x, target, raw_target in stream.iterator():
         if step >= args.max_steps:
             break
+
+        instruction = None
+        if d3a_controller is not None:
+            representation = seq_x.detach().cpu().mean(dim=0).numpy().flatten()
+            signal, instruction = d3a_controller.assess(representation)
 
         model.eval()
         with torch.no_grad():
@@ -316,6 +336,104 @@ def main() -> None:
             metrics["mape"].append(mape)
             metrics["mspe"].append(mspe)
             if replay_buffer is not None:
+                store_allowed = instruction.store_state if instruction is not None else True
+                if store_allowed:
+                    replay_buffer.push(
+                        StreamBatch(
+                            features=seq_np.astype(np.float32),
+                            context={},
+                            target=target_np.astype(np.float32),
+                            timestamp=step,
+                        )
+                    )
+            if instruction is not None and instruction.trigger_adaptation:
+                logger.info(
+                    "D3A trigger at step=%d | strength=%.4f | type=%s",
+                    step,
+                    instruction.drift_strength,
+                    instruction.drift_type,
+                )
+            if mae < best_mae:
+                best_mae = mae
+                if ema is not None:
+                    best_state = copy.deepcopy(ema.state_dict())
+                    best_state_from_ema = True
+                else:
+                    best_state = copy.deepcopy(model.state_dict())
+                    best_state_from_ema = False
+
+        should_update = (
+            step >= args.pretrain_steps and (step - args.pretrain_steps) % max(args.update_interval, 1) == 0
+        )
+        if d3a_controller is not None and instruction is not None:
+            should_update = should_update and instruction.trigger_adaptation
+
+        if should_update and target is not None:
+            model.train()
+            optimizer.zero_grad()
+            seq_batch = seq_x
+            target_batch = target
+            if replay_buffer is not None and args.replay_sample > 0:
+                samples = replay_buffer.sample(args.replay_sample)
+                replay_feats = []
+                replay_targets = []
+                for sample in samples:
+                    if sample.target is None:
+                        continue
+                    replay_feats.append(torch.as_tensor(sample.features, dtype=torch.float32, device=device))
+                    replay_targets.append(torch.as_tensor(sample.target, dtype=torch.float32, device=device))
+                if replay_feats and replay_targets:
+                    seq_batch = torch.cat([seq_batch] + replay_feats, dim=0)
+                    target_batch = torch.cat([target] + replay_targets, dim=0)
+
+            prediction = model(seq_batch)
+            loss = criterion(prediction, target_batch)
+            loss.backward()
+            if args.grad_clip_norm > 0:
+                clip_grad_norm_(model.parameters(), args.grad_clip_norm)
+            optimizer.step()
+            if ema is not None:
+                ema.update(model)
+            step_scheduler(scheduler, loss.item())
+
+        if args.log_interval > 0 and (step + 1) % args.log_interval == 0 and metrics["mae"]:
+            recent_mae = float(np.mean(metrics["mae"][-args.log_interval :]))
+            recent_mse = float(np.mean(metrics["mse"][-args.log_interval :]))
+            recent_rmse = float(np.mean(metrics["rmse"][-args.log_interval :]))
+            logger.info(
+                "step=%d | mae=%.4f | rmse=%.4f | mse=%.4f | lr=%.6f",
+                step + 1,
+                recent_mae,
+                recent_rmse,
+                recent_mse,
+                optimizer.param_groups[0]["lr"],
+            )
+
+    if best_state is not None:
+        if best_state_from_ema and ema is not None:
+            ema.load_state_dict(best_state)
+            ema.copy_to_model(model)
+        else:
+            model.load_state_dict(best_state)
+
+    if metrics["mae"]:
+        overall_mae = float(np.mean(metrics["mae"]))
+        overall_rmse = float(np.mean(metrics["rmse"]))
+        overall_mse = float(np.mean(metrics["mse"]))
+        overall_mape = float(np.mean(metrics["mape"]))
+        logger.info(
+            "Finished online adaptation | mae=%.4f | rmse=%.4f | mse=%.4f | mape=%.4f",
+            overall_mae,
+            overall_rmse,
+            overall_mse,
+            overall_mape,
+        )
+    else:
+        logger.warning("No labels were observed during the run; unable to report metrics.")
+
+
+if __name__ == "__main__":
+    main()
                 replay_buffer.push(
                     StreamBatch(
                         features=seq_np.astype(np.float32),

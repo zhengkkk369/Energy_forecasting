@@ -1,11 +1,11 @@
 import pytest
 import torch
 
-from energy_forecasting.config import ProjectConfig
-from energy_forecasting.models import BaselineConfig
-from energy_forecasting.training.early_stopping import EarlyStopping
-from energy_forecasting.training.ema import ModelEMA
-from energy_forecasting.training.lr_utils import WarmupScheduler
+from src.energy_forecasting.config import ProjectConfig
+from src.energy_forecasting.models import BaselineConfig
+from src.energy_forecasting.training.early_stopping import EarlyStopping
+from src.energy_forecasting.training.ema import ModelEMA
+from src.energy_forecasting.training.lr_utils import WarmupScheduler
 
 
 def test_default_config() -> None:

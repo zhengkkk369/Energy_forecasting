@@ -1,7 +1,7 @@
 import numpy as np
 
-from energy_forecasting.config import ProjectConfig
-from energy_forecasting.drift.d3a import D3AController
+from src.energy_forecasting.config import ProjectConfig
+from src.energy_forecasting.drift.d3a import D3AController
 
 
 def test_d3a_triggers_after_confirmation() -> None:
