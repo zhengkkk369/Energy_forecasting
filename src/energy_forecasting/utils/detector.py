@@ -3,6 +3,7 @@ from scipy.stats import norm
 import torch
 from pathlib import Path
 import matplotlib.pyplot as plt
+from matplotlib import font_manager
 import seaborn as sns
 palette = 'colorblind'
 colors = ['gold', 'grey', '#d7191c', '#2b83ba' ]
@@ -73,7 +74,9 @@ class STEPD:
 
     def plt_distribution(self, data, name='error', c1 = colors[0], c2 = colors[1], save_path=None):
         sns.set(style="whitegrid", font_scale=1.8)
-        plt.rcParams["font.family"] = "Times New Roman"
+        available_fonts = {f.name for f in font_manager.fontManager.ttflist}
+        if "Times New Roman" in available_fonts:
+            plt.rcParams["font.family"] = "Times New Roman"
         plt.figure(figsize=(12, 8))
         plt.plot(data, label='Entire Dataset', color=c1)
 
