@@ -104,6 +104,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--d3a_alpha_d", default=0.003, type=float, help="Drift threshold for STEPD.")
     parser.add_argument("--d3a_min_lr", default=1e-4, type=float, help="Minimum LR when STEPD adapts learning rate.")
     parser.add_argument("--d3a_max_lr", default=3e-3, type=float, help="Maximum LR when STEPD adapts learning rate.")
+    parser.add_argument("--d3a_plot_path", default=None, type=str, help="Optional path to save STEPD error plot.")
     return parser.parse_args()
 
 
@@ -345,14 +346,23 @@ def main() -> None:
             metrics["mape"].append(mape)
             metrics["mspe"].append(mspe)
             if args.use_d3a and detector is not None:
-                error_rate = float(np.mean(np.abs(pred_np - target_np)))
-                detector.add_data(error_rate, seq_x.detach().cpu())
+                mae_error = float(np.mean(np.abs(pred_np - target_np)))
+                detector.add_data(mae_error, seq_x.detach().cpu())
                 drift_flag, suggested_lr = detector.run_test()
                 if suggested_lr is not None:
                     lr_new = float(np.clip(suggested_lr, args.d3a_min_lr, args.d3a_max_lr))
                     for group in optimizer.param_groups:
                         group["lr"] = lr_new
                 if drift_flag:
+                    if args.d3a_plot_path and detector.data:
+                        plot_root = Path(args.d3a_plot_path)
+                        if plot_root.suffix:
+                            plot_path = plot_root
+                        else:
+                            plot_root.mkdir(parents=True, exist_ok=True)
+                            plot_path = plot_root / f"stepd_mae_step_{step + 1:06d}.pdf"
+                        detector.plt_distribution(detector.data, name="mae", save_path=str(plot_path))
+                        logger.info("STEPD plot saved to %s", plot_path)
                     detector.reset()
                     logger.info("STEPD drift detected at step=%d | suggested_lr=%s", step, f"{suggested_lr:.5f}" if suggested_lr is not None else "n/a")
             if buffer is not None:

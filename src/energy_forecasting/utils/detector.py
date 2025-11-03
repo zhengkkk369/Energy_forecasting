@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.stats import norm
 import torch
-import os 
+from pathlib import Path
 import matplotlib.pyplot as plt
 import seaborn as sns
 palette = 'colorblind'
@@ -71,7 +71,7 @@ class STEPD:
             lr = 1e-4 + (3e-3 - 1e-4) * (theta_stepd / drift_threshold)
             return 0, max(lr, 1e-4)
 
-    def plt_distribution(self, data, name='error', c1 = colors[0], c2 = colors[1]):
+    def plt_distribution(self, data, name='error', c1 = colors[0], c2 = colors[1], save_path=None):
         sns.set(style="whitegrid", font_scale=1.8)
         plt.rcParams["font.family"] = "Times New Roman"
         plt.figure(figsize=(12, 8))
@@ -97,9 +97,14 @@ class STEPD:
         # Add legend
         
         # Save the plot as a PDF file
-        if not os.path.exists('imgs/drift/'):
-            os.mkdir('imgs/drift/')
+        if save_path is None:
+            save_dir = Path('imgs/drift')
+            save_dir.mkdir(parents=True, exist_ok=True)
+            file_path = save_dir / f'{name}_plot_{self.shift_cnt}.pdf'
+        else:
+            file_path = Path(save_path)
+            file_path.parent.mkdir(parents=True, exist_ok=True)
         sns.despine(offset=10, trim=True)
         plt.tight_layout()
-        plt.savefig(f'imgs/drift/{name}_plot_{self.shift_cnt}.pdf')
+        plt.savefig(file_path)
         plt.close()
