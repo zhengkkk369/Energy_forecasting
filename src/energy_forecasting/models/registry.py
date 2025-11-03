@@ -10,7 +10,7 @@ from .modules.lstm import build_lstm
 from .modules.patchtst import build_patchtst
 from .modules.tcn import build_tcn
 from .modules.transformers import build_informer, build_transformer
-from .modules.ts2vec import build_ts2vec
+from .ts2vec.wrapper import build_fsnet_model, build_nomem_model, build_ncca_model
 
 
 ModelBuilder = Callable[[ModelConfig], object]
@@ -53,13 +53,39 @@ def _build_transformer(cfg: ModelConfig):
     )
 
 
-def _build_ts2vec(cfg: ModelConfig):
-    return build_ts2vec(
+def _build_fsnet(cfg: ModelConfig):
+    return build_fsnet_model(
         input_dim=cfg.input_dim,
         pred_len=cfg.pred_len,
         output_dim=cfg.output_dim,
-        hidden_dim=cfg.hidden_dim,
         rep_dim=cfg.rep_dim,
+        hidden_dim=cfg.hidden_dim,
+        depth=cfg.ts2vec_depth,
+        gamma=cfg.ts2vec_gamma,
+    )
+
+
+def _build_nomem(cfg: ModelConfig):
+    return build_nomem_model(
+        input_dim=cfg.input_dim,
+        pred_len=cfg.pred_len,
+        output_dim=cfg.output_dim,
+        rep_dim=cfg.rep_dim,
+        hidden_dim=cfg.hidden_dim,
+        depth=cfg.ts2vec_depth,
+        gamma=cfg.ts2vec_gamma,
+    )
+
+
+def _build_ncca(cfg: ModelConfig):
+    return build_ncca_model(
+        input_dim=cfg.input_dim,
+        pred_len=cfg.pred_len,
+        output_dim=cfg.output_dim,
+        rep_dim=cfg.rep_dim,
+        hidden_dim=cfg.hidden_dim,
+        depth=cfg.ts2vec_depth,
+        gamma=cfg.ts2vec_gamma,
     )
 
 
@@ -126,13 +152,18 @@ MODEL_REGISTRY: Dict[str, ModelBuilder] = {
     "lstm": _build_lstm,
     "tcn": _build_tcn,
     "transformer": _build_transformer,
-    "ts2vec": _build_ts2vec,
+    "fsnet": _build_fsnet,
+    "nomem": _build_nomem,
+    "ncca": _build_ncca,
     "autoformer": _build_autoformer,
     "dlinear": _build_dlinear,
     "informer": _build_informer,
     "patchtst": _build_patchtst,
     "fedformer": _build_fedformer,
 }
+
+
+MODEL_REGISTRY["ts2vec"] = _build_fsnet  # backward compatibility
 
 
 def create_model(cfg: ModelConfig):

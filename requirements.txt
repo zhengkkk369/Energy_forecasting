@@ -4,3 +4,6 @@ torch
 matplotlib
 pandas
 scikit-learn
+einops
+numexpr
+torchvision

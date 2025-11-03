@@ -24,6 +24,7 @@ from energy_forecasting.models import BaselineConfig  # noqa: E402
 from energy_forecasting.training.ema import ModelEMA  # noqa: E402
 from energy_forecasting.training.lr_utils import WarmupScheduler  # noqa: E402
 from energy_forecasting.training.replay import ReplayBuffer  # noqa: E402
+from energy_forecasting.utils import cumavg, metric as calc_metric  # noqa: E402
 from energy_forecasting.utils.logging import create_logger  # noqa: E402
 
 DATASET_REGISTRY = {
@@ -48,12 +49,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument(
         "--model",
-        default="ts2vec",
+        default="fsnet",
         choices=[
             "lstm",
             "tcn",
             "transformer",
-            "ts2vec",
+            "fsnet",
+            "nomem",
+            "ncca",
             "autoformer",
             "dlinear",
             "informer",
@@ -285,7 +288,7 @@ def main() -> None:
         args.max_steps,
     )
 
-    metrics = {"mae": [], "mse": []}
+    metrics = {"mae": [], "mse": [], "rmse": [], "mape": [], "mspe": []}
     best_mae = float("inf")
     best_state = None
     best_state_from_ema = False
@@ -303,16 +306,21 @@ def main() -> None:
                 ema.restore(model)
 
         if target is not None:
-            mae = torch.mean(torch.abs(prediction - target)).item()
-            mse = torch.mean((prediction - target) ** 2).item()
+            seq_np = seq_x.detach().cpu().numpy()
+            pred_np = prediction.detach().cpu().numpy()
+            target_np = target.detach().cpu().numpy()
+            mae, mse, rmse, mape, mspe = calc_metric(pred_np, target_np)
             metrics["mae"].append(mae)
             metrics["mse"].append(mse)
+            metrics["rmse"].append(rmse)
+            metrics["mape"].append(mape)
+            metrics["mspe"].append(mspe)
             if replay_buffer is not None:
                 replay_buffer.push(
                     StreamBatch(
-                        features=seq_x.detach().cpu().numpy(),
+                        features=seq_np.astype(np.float32),
                         context={},
-                        target=target.detach().cpu().numpy(),
+                        target=target_np.astype(np.float32),
                         timestamp=step,
                     )
                 )
@@ -357,10 +365,12 @@ def main() -> None:
         if args.log_interval > 0 and (step + 1) % args.log_interval == 0 and metrics["mae"]:
             recent_mae = float(np.mean(metrics["mae"][-args.log_interval :]))
             recent_mse = float(np.mean(metrics["mse"][-args.log_interval :]))
+            recent_rmse = float(np.mean(metrics["rmse"][-args.log_interval :]))
             logger.info(
-                "step=%d | mae=%.4f | mse=%.4f | lr=%.6f",
+                "step=%d | mae=%.4f | rmse=%.4f | mse=%.4f | lr=%.6f",
                 step + 1,
                 recent_mae,
+                recent_rmse,
                 recent_mse,
                 optimizer.param_groups[0]["lr"],
             )
@@ -374,8 +384,16 @@ def main() -> None:
 
     if metrics["mae"]:
         overall_mae = float(np.mean(metrics["mae"]))
+        overall_rmse = float(np.mean(metrics["rmse"]))
         overall_mse = float(np.mean(metrics["mse"]))
-        logger.info("Finished online adaptation | overall_mae=%.4f | overall_mse=%.4f", overall_mae, overall_mse)
+        overall_mape = float(np.mean(metrics["mape"]))
+        logger.info(
+            "Finished online adaptation | mae=%.4f | rmse=%.4f | mse=%.4f | mape=%.4f",
+            overall_mae,
+            overall_rmse,
+            overall_mse,
+            overall_mape,
+        )
     else:
         logger.warning("No labels were observed during the run; unable to report metrics.")
 
