@@ -40,13 +40,13 @@ DATASET_REGISTRY = {
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="OneNet-style online continual learning loop.")
-    parser.add_argument("--data-root", default="data", type=str, help="Directory containing CSV datasets.")
+    parser.add_argument("--data_root", default="data", type=str, help="Directory containing CSV datasets.")
     parser.add_argument("--dataset", default="ETTh1", choices=DATASET_REGISTRY.keys())
     parser.add_argument("--features", default="M", choices=["S", "M", "MS"])
-    parser.add_argument("--seq-len", default=96, type=int)
-    parser.add_argument("--label-len", default=48, type=int)
-    parser.add_argument("--pred-len", default=24, type=int)
-    parser.add_argument("--learning-rate", default=5e-4, type=float)
+    parser.add_argument("--seq_len", default=96, type=int)
+    parser.add_argument("--label_len", default=48, type=int)
+    parser.add_argument("--pred_len", default=24, type=int)
+    parser.add_argument("--learning_rate", default=5e-4, type=float)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument(
         "--model",
@@ -65,43 +65,45 @@ def parse_args() -> argparse.Namespace:
             "fedformer",
         ],
     )
-    parser.add_argument("--hidden-dim", default=128, type=int)
-    parser.add_argument("--num-layers", default=2, type=int)
+    parser.add_argument("--hidden_dim", default=128, type=int)
+    parser.add_argument("--num_layers", default=2, type=int)
     parser.add_argument("--dropout", default=0.1, type=float)
-    parser.add_argument("--num-heads", default=4, type=int)
-    parser.add_argument("--d-model", default=128, type=int)
-    parser.add_argument("--ff-dim", default=256, type=int)
+    parser.add_argument("--num_heads", default=4, type=int)
+    parser.add_argument("--d_model", default=128, type=int)
+    parser.add_argument("--ff_dim", default=256, type=int)
     parser.add_argument("--pooling", default="last", choices=["last", "mean"])
-    parser.add_argument("--tcn-levels", default=4, type=int)
-    parser.add_argument("--kernel-size", default=3, type=int)
-    parser.add_argument("--patch-len", default=16, type=int)
-    parser.add_argument("--freq-top-k", default=16, type=int)
-    parser.add_argument("--rep-dim", default=128, type=int)
+    parser.add_argument("--tcn_levels", default=4, type=int)
+    parser.add_argument("--kernel_size", default=3, type=int)
+    parser.add_argument("--patch_len", default=16, type=int)
+    parser.add_argument("--freq_top_k", default=16, type=int)
+    parser.add_argument("--rep_dim", default=128, type=int)
 
     parser.add_argument("--scheduler", default="cosine", choices=["none", "step", "cosine", "plateau"])
-    parser.add_argument("--scheduler-step-size", default=200, type=int)
-    parser.add_argument("--scheduler-gamma", default=0.7, type=float)
-    parser.add_argument("--scheduler-t-max", default=500, type=int)
-    parser.add_argument("--scheduler-min-lr", default=1e-6, type=float)
-    parser.add_argument("--warmup-steps", default=0, type=int)
-    parser.add_argument("--warmup-start-factor", default=0.1, type=float)
-    parser.add_argument("--ema-decay", default=0.0, type=float)
-    parser.add_argument("--grad-clip-norm", default=0.0, type=float)
-    parser.add_argument("--pretrain-steps", default=200, type=int)
-    parser.add_argument("--update-interval", default=1, type=int)
-    parser.add_argument("--max-steps", default=-1, type=int)
-    parser.add_argument("--log-interval", default=50, type=int)
-    parser.add_argument("--label-delay", default=0, type=int)
-    parser.add_argument("--enable-drift", action="store_true")
-    parser.add_argument("--drift-config", default=None, type=str, help="JSON file describing drift schedules.")
-    parser.add_argument("--replay-size", default=0, type=int, help="Replay buffer capacity (0 disables).")
-    parser.add_argument("--replay-sample", default=4, type=int, help="samples per update.")
-    parser.add_argument("--use-d3a", dest="use_d3a", action="store_true", help="Enable detect-then-adapt controller.")
-    parser.add_argument("--d3a-window", default=168, type=int, help="Sliding window size for STEPD detector.")
-    parser.add_argument("--d3a-alpha-w", default=0.05, type=float, help="Warning threshold for STEPD.")
-    parser.add_argument("--d3a-alpha-d", default=0.003, type=float, help="Drift threshold for STEPD.")
-    parser.add_argument("--d3a-min-lr", default=1e-4, type=float, help="Minimum LR when STEPD adapts learning rate.")
-    parser.add_argument("--d3a-max-lr", default=3e-3, type=float, help="Maximum LR when STEPD adapts learning rate.")
+    parser.add_argument("--scheduler_step_size", default=200, type=int)
+    parser.add_argument("--scheduler_gamma", default=0.7, type=float)
+    parser.add_argument("--scheduler_t_max", default=500, type=int)
+    parser.add_argument("--scheduler_min_lr", default=1e-6, type=float)
+    parser.add_argument("--warmup_steps", default=0, type=int)
+    parser.add_argument("--warmup_start_factor", default=0.1, type=float)
+    parser.add_argument("--ema_decay", default=0.0, type=float)
+    parser.add_argument("--grad_clip_norm", default=0.0, type=float)
+    parser.add_argument("--pretrain_steps", default=200, type=int)
+    parser.add_argument("--update_interval", default=1, type=int)
+    parser.add_argument("--max_steps", default=-1, type=int)
+    parser.add_argument("--log_interval", default=50, type=int)
+    parser.add_argument("--label_delay", default=0, type=int)
+    parser.add_argument("--enable_drift", action="store_true")
+    parser.add_argument("--drift_config", default=None, type=str, help="JSON file describing drift schedules.")
+    parser.add_argument("--replay_size", default=512, type=int, help="Buffer capacity (0 disables).")
+    parser.add_argument("--replay_sample", default=64, type=int, help="Samples drawn from buffer per update.")
+    parser.add_argument("--pretrain_epochs", default=3, type=int, help="Epochs to run on first update after pretraining.")
+    parser.add_argument("--update_epochs", default=1, type=int, help="Epochs to run on subsequent updates.")
+    parser.add_argument("--use_d3a", dest="use_d3a", action="store_true", help="Enable detect-then-adapt controller.")
+    parser.add_argument("--d3a_window", default=168, type=int, help="Sliding window size for STEPD detector.")
+    parser.add_argument("--d3a_alpha_w", default=0.05, type=float, help="Warning threshold for STEPD.")
+    parser.add_argument("--d3a_alpha_d", default=0.003, type=float, help="Drift threshold for STEPD.")
+    parser.add_argument("--d3a_min_lr", default=1e-4, type=float, help="Minimum LR when STEPD adapts learning rate.")
+    parser.add_argument("--d3a_max_lr", default=3e-3, type=float, help="Maximum LR when STEPD adapts learning rate.")
     return parser.parse_args()
 
 
@@ -360,15 +362,6 @@ def main() -> None:
                     logits=None,
                     task_labels=None,
                 )
-            elif buffer is not None:
-                buffer.push(
-                    StreamBatch(
-                        features=seq_np.astype(np.float32),
-                        context={},
-                        target=target_np.astype(np.float32),
-                        timestamp=step,
-                    )
-                )
             if mae < best_mae:
                 best_mae = mae
                 if ema is not None:
@@ -385,40 +378,41 @@ def main() -> None:
             should_update = True
 
         if should_update and target is not None:
+            epochs = args.update_epochs
+            if step == args.pretrain_steps and args.pretrain_epochs > 0:
+                epochs = max(args.pretrain_epochs, epochs)
             model.train()
-            optimizer.zero_grad()
-            seq_batch = seq_x
-            target_batch = target
-            if args.use_d3a and buffer is not None and args.replay_sample > 0 and not buffer.is_empty():
-                samples = buffer.get_data(args.replay_sample)
-                if samples:
-                    examples = samples[0]
-                    labels = samples[1] if len(samples) > 1 else None
-                    if labels is not None:
-                        seq_batch = torch.cat([seq_batch, examples], dim=0)
-                        target_batch = torch.cat([target_batch, labels], dim=0)
-            elif buffer is not None and args.replay_sample > 0:
-                samples = buffer.sample(args.replay_sample)
-                replay_feats = []
-                replay_targets = []
-                for sample in samples:
-                    if sample.target is None:
-                        continue
-                    replay_feats.append(torch.as_tensor(sample.features, dtype=torch.float32, device=device))
-                    replay_targets.append(torch.as_tensor(sample.target, dtype=torch.float32, device=device))
-                if replay_feats and replay_targets:
-                    seq_batch = torch.cat([seq_batch] + replay_feats, dim=0)
-                    target_batch = torch.cat([target] + replay_targets, dim=0)
+            loss_accumulator = []
+            for _ in range(max(1, epochs)):
+                seq_batch = seq_x
+                target_batch = target
+                if (
+                    buffer is not None
+                    and args.replay_sample > 0
+                    and hasattr(buffer, "examples")
+                    and not buffer.is_empty()
+                ):
+                    sample_limit = buffer.examples.shape[0]
+                    sample_size = min(args.replay_sample, sample_limit)
+                    extra = buffer.get_data(sample_size)
+                    extra_examples = extra[0]
+                    extra_labels = extra[1] if len(extra) > 1 else None
+                    if extra_labels is not None:
+                        seq_batch = torch.cat([seq_batch, extra_examples], dim=0)
+                        target_batch = torch.cat([target_batch, extra_labels], dim=0)
 
-            prediction = model(seq_batch)
-            loss = criterion(prediction, target_batch)
-            loss.backward()
-            if args.grad_clip_norm > 0:
-                clip_grad_norm_(model.parameters(), args.grad_clip_norm)
-            optimizer.step()
-            if ema is not None:
-                ema.update(model)
-            step_scheduler(scheduler, loss.item())
+                optimizer.zero_grad()
+                prediction = model(seq_batch)
+                loss = criterion(prediction, target_batch)
+                loss.backward()
+                if args.grad_clip_norm > 0:
+                    clip_grad_norm_(model.parameters(), args.grad_clip_norm)
+                optimizer.step()
+                if ema is not None:
+                    ema.update(model)
+                loss_accumulator.append(loss.item())
+            if loss_accumulator:
+                step_scheduler(scheduler, float(np.mean(loss_accumulator)))
 
         if args.log_interval > 0 and (step + 1) % args.log_interval == 0 and metrics["mae"]:
             recent_mae = float(np.mean(metrics["mae"][-args.log_interval :]))
