@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Tuple
 
 @dataclass
 class ModelConfig:
@@ -23,6 +24,8 @@ class ModelConfig:
     freq_top_k: int = 16
     ts2vec_depth: int = 10
     ts2vec_gamma: float = 0.9
+    onenet_kernel_sizes: Tuple[int, ...] = (3, 5, 7)
+    onenet_activation: str = "gelu"
 
     def build(self):
         from .registry import create_model
