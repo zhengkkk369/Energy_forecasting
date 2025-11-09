@@ -36,6 +36,32 @@ DATASET_REGISTRY = {
     "ECL": (Dataset_Custom, {"data_path": "ECL.csv", "freq": "h", "target": "MT_320"}),
     "WTH": (Dataset_Custom, {"data_path": "WTH.csv", "freq": "h", "target": "WetBulbCelsius"}),
 }
+DATASET_DEFAULTS = {
+    "ETTh1": {
+        "seq_len": 336,
+        "label_len": 168,
+        "pred_len": 96,
+        "learning_rate": 1e-3,
+        "d_model": 256,
+    },
+    "ETTh2": {
+        "seq_len": 336,
+        "label_len": 168,
+        "pred_len": 96,
+        "learning_rate": 1e-3,
+        "d_model": 256,
+    },
+}
+
+
+def _parse_kernel_sizes(value: str) -> Tuple[int, ...]:
+    try:
+        items = [int(part.strip()) for part in value.split(",") if part.strip()]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("Kernel sizes must be comma-separated integers") from exc
+    if not items:
+        raise argparse.ArgumentTypeError("At least one kernel size must be provided")
+    return tuple(items)
 
 
 def parse_args() -> argparse.Namespace:
@@ -63,6 +89,7 @@ def parse_args() -> argparse.Namespace:
             "informer",
             "patchtst",
             "fedformer",
+            "onenet",
         ],
     )
     parser.add_argument("--hidden_dim", default=128, type=int)
@@ -77,6 +104,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--patch_len", default=16, type=int)
     parser.add_argument("--freq_top_k", default=16, type=int)
     parser.add_argument("--rep_dim", default=128, type=int)
+    parser.add_argument(
+        "--onenet_kernel_sizes",
+        default=(3, 5, 7),
+        type=_parse_kernel_sizes,
+        help="Comma separated convolution kernel sizes for OneNet's multiscale blocks.",
+    )
+    parser.add_argument(
+        "--onenet_activation",
+        default="gelu",
+        choices=["relu", "gelu", "silu"],
+        help="Activation used inside OneNet's convolutional blocks.",
+    )
 
     parser.add_argument("--scheduler", default="cosine", choices=["none", "step", "cosine", "plateau"])
     parser.add_argument("--scheduler_step_size", default=200, type=int)
@@ -105,7 +144,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--d3a_min_lr", default=1e-4, type=float, help="Minimum LR when STEPD adapts learning rate.")
     parser.add_argument("--d3a_max_lr", default=3e-3, type=float, help="Maximum LR when STEPD adapts learning rate.")
     parser.add_argument("--d3a_plot_path", default='pics/d3a', type=str, help="Optional path to save STEPD error plot.")
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    dataset_defaults = DATASET_DEFAULTS.get(args.dataset)
+    if dataset_defaults is not None:
+        for key, value in dataset_defaults.items():
+            default_value = parser.get_default(key)
+            if getattr(args, key) == default_value:
+                setattr(args, key, value)
+
+    return args
 
 
 class OnlineStream:
@@ -280,6 +328,8 @@ def main() -> None:
         patch_len=args.patch_len,
         freq_top_k=args.freq_top_k,
         rep_dim=args.rep_dim,
+        onenet_kernel_sizes=args.onenet_kernel_sizes,
+        onenet_activation=args.onenet_activation,
     )
 
     model = model_config.build().to(device)

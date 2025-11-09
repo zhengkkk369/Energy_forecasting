@@ -10,6 +10,7 @@ from .modules.lstm import build_lstm
 from .modules.patchtst import build_patchtst
 from .modules.tcn import build_tcn
 from .modules.transformers import build_informer, build_transformer
+from .modules.onenet import build_onenet
 from .ts2vec.wrapper import build_fsnet_model, build_nomem_model, build_ncca_model
 
 
@@ -160,6 +161,17 @@ MODEL_REGISTRY: Dict[str, ModelBuilder] = {
     "informer": _build_informer,
     "patchtst": _build_patchtst,
     "fedformer": _build_fedformer,
+    "onenet": lambda cfg: build_onenet(
+        input_dim=cfg.input_dim,
+        output_dim=cfg.output_dim,
+        seq_len=cfg.seq_len,
+        pred_len=cfg.pred_len,
+        d_model=cfg.d_model,
+        num_layers=cfg.num_layers,
+        dropout=cfg.dropout,
+        kernel_sizes=cfg.onenet_kernel_sizes,
+        activation=cfg.onenet_activation,
+    ),
 }
 
 
