@@ -2,6 +2,7 @@ import argparse
 import copy
 import json
 import sys
+from collections import deque
 from pathlib import Path
 from typing import Iterable, Iterator, Optional, Tuple
 
@@ -10,6 +11,7 @@ import torch
 from torch import nn
 from torch.nn.utils import clip_grad_norm_
 from torch.optim.lr_scheduler import CosineAnnealingLR, ReduceLROnPlateau, StepLR
+from torch.utils.data import DataLoader
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -156,47 +158,46 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-class OnlineStream:
-    """Concatenate dataset partitions to simulate a continuous online stream."""
+class DataLoaderStream:
+    """Iterate dataset splits sequentially using `DataLoader` for OneNet-style adaptation."""
 
     def __init__(
         self,
-        datasets: Iterable,
+        loaders: Iterable[DataLoader],
         pred_len: int,
         label_delay: int,
         device: torch.device,
         drift_injector: Optional[DriftInjector] = None,
     ) -> None:
-        self.datasets = list(datasets)
+        self.loaders = list(loaders)
         self.pred_len = pred_len
         self.label_delay = label_delay
         self.device = device
         self.drift_injector = drift_injector
-        self._queue: list[Tuple[torch.Tensor, torch.Tensor]] = []
-        self._build_lengths()
-
-    def _build_lengths(self) -> None:
-        self._lengths = [len(ds) for ds in self.datasets]
-        self.total = sum(self._lengths)
+        self.datasets = [loader.dataset for loader in self.loaders if hasattr(loader, "dataset")]
+        self._queue: deque[torch.Tensor] = deque()
+        self.total = sum(len(dataset) for dataset in self.datasets)
 
     def __len__(self) -> int:
         return self.total
 
     def iterator(self) -> Iterator[Tuple[int, torch.Tensor, Optional[torch.Tensor], torch.Tensor]]:
         step = 0
-        for dataset in self.datasets:
-            for idx in range(len(dataset)):
-                seq_x, seq_y, seq_x_mark, seq_y_mark = dataset[idx]
+        for loader in self.loaders:
+            for batch in loader:
+                seq_x, seq_y, seq_x_mark, seq_y_mark = batch
 
-                seq_x_np = np.asarray(seq_x, dtype=np.float32)
-                seq_y_np = np.asarray(seq_y, dtype=np.float32)
+                seq_x_np = seq_x.squeeze(0).detach().cpu().numpy().astype(np.float32)
+                seq_y_np = seq_y.squeeze(0).detach().cpu().numpy().astype(np.float32)
+                seq_x_mark_np = seq_x_mark.squeeze(0).detach().cpu().numpy().astype(np.float32)
+                seq_y_mark_np = seq_y_mark.squeeze(0).detach().cpu().numpy().astype(np.float32)
 
                 if self.drift_injector is not None:
                     batch_np = StreamBatch(
                         features=seq_x_np[None, ...],
                         context={
-                            "seq_x_mark": np.asarray(seq_x_mark, dtype=np.float32)[None, ...],
-                            "seq_y_mark": np.asarray(seq_y_mark, dtype=np.float32)[None, ...],
+                            "seq_x_mark": seq_x_mark_np[None, ...],
+                            "seq_y_mark": seq_y_mark_np[None, ...],
                         },
                         target=seq_y_np[None, ...],
                         timestamp=step,
@@ -211,18 +212,21 @@ class OnlineStream:
                     seq_y_np[-self.pred_len :], dtype=torch.float32, device=self.device
                 ).unsqueeze(0)
 
-                available_target = None
+                available_target: Optional[torch.Tensor] = None
                 if self.label_delay == 0:
                     available_target = target_full
                 else:
-                    self._queue.append((seq_x_tensor, target_full))
+                    self._queue.append(target_full)
                     if len(self._queue) > self.label_delay:
-                        _, available_target = self._queue.pop(0)
+                        available_target = self._queue.popleft()
+
                 yield step, seq_x_tensor, available_target, target_full
                 step += 1
 
 
-def build_stream(args: argparse.Namespace, device: torch.device, drift_injector: Optional[DriftInjector]) -> OnlineStream:
+def build_stream(
+    args: argparse.Namespace, device: torch.device, drift_injector: Optional[DriftInjector]
+) -> DataLoaderStream:
     dataset_cls, base_kwargs = DATASET_REGISTRY[args.dataset]
     dataset_kwargs = {
         "size": (args.seq_len, args.label_len, args.pred_len),
@@ -235,7 +239,11 @@ def build_stream(args: argparse.Namespace, device: torch.device, drift_injector:
     root = Path(args.data_root)
     datasets = [dataset_cls(root_path=root, flag=flag, **dataset_kwargs) for flag in ("train", "val", "test")]
     datasets = [ds for ds in datasets if len(ds) > 0]
-    return OnlineStream(datasets, args.pred_len, args.label_delay, device, drift_injector=drift_injector)
+    loaders = [
+        DataLoader(dataset, batch_size=1, shuffle=False, num_workers=0, drop_last=False)
+        for dataset in datasets
+    ]
+    return DataLoaderStream(loaders, args.pred_len, args.label_delay, device, drift_injector=drift_injector)
 
 
 def build_scheduler(optimizer: torch.optim.Optimizer, args: argparse.Namespace):
