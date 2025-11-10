@@ -32,6 +32,33 @@ DATASET_REGISTRY = {
     "WTH": (Dataset_Custom, {"data_path": "WTH.csv", "freq": "h", "target": "WetBulbCelsius"}),
 }
 
+DATASET_DEFAULTS = {
+    "ETTh1": {
+        "seq_len": 336,
+        "label_len": 168,
+        "pred_len": 96,
+        "learning_rate": 1e-3,
+        "d_model": 256,
+    },
+    "ETTh2": {
+        "seq_len": 336,
+        "label_len": 168,
+        "pred_len": 96,
+        "learning_rate": 1e-3,
+        "d_model": 256,
+    },
+}
+
+
+def _parse_kernel_sizes(value: str) -> tuple[int, ...]:
+    try:
+        items = [int(part.strip()) for part in value.split(",") if part.strip()]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("Kernel sizes must be comma-separated integers") from exc
+    if not items:
+        raise argparse.ArgumentTypeError("At least one kernel size must be provided")
+    return tuple(items)
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train baseline forecasters (LSTM/TCN/Transformer) on energy datasets.")
@@ -61,6 +88,7 @@ def parse_args() -> argparse.Namespace:
             "informer",
             "patchtst",
             "fedformer",
+            "onenet",
         ],
     )
     parser.add_argument("--hidden-dim", default=128, type=int)
@@ -116,7 +144,28 @@ def parse_args() -> argparse.Namespace:
         type=float,
         help="If >0, maintain an exponential moving average of model weights for evaluation.",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--onenet-kernel-sizes",
+        default=(3, 5, 7),
+        type=_parse_kernel_sizes,
+        help="Comma separated kernel sizes for OneNet's multiscale convolution blocks.",
+    )
+    parser.add_argument(
+        "--onenet-activation",
+        default="gelu",
+        choices=["relu", "gelu", "silu"],
+        help="Activation function used inside OneNet blocks.",
+    )
+    args = parser.parse_args()
+
+    dataset_defaults = DATASET_DEFAULTS.get(args.dataset)
+    if dataset_defaults is not None:
+        for key, value in dataset_defaults.items():
+            default_value = parser.get_default(key)
+            if getattr(args, key) == default_value:
+                setattr(args, key, value)
+
+    return args
 
 
 def build_dataloaders(args: argparse.Namespace):
@@ -287,6 +336,8 @@ def main() -> None:
         patch_len=args.patch_len,
         freq_top_k=args.freq_top_k,
         rep_dim=args.rep_dim,
+        onenet_kernel_sizes=args.onenet_kernel_sizes,
+        onenet_activation=args.onenet_activation,
     )
     model = model_config.build().to(args.device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)

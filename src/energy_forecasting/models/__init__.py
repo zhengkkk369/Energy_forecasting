@@ -7,3 +7,4 @@ from .memory import AdapterMemory  # noqa: F401
 from .fusion import AdapterFusion  # noqa: F401
 from .config import ModelConfig, BaselineConfig  # noqa: F401
 from .registry import create_model  # noqa: F401
+from .onenet import OneNet  # noqa: F401
