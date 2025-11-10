@@ -16,21 +16,18 @@ SRC_ROOT = ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.append(str(SRC_ROOT))
 
-from data.data_loader import Dataset_ETT_hour, Dataset_ETT_minute, Dataset_Custom  # noqa: E402
+from src.energy_forecasting.cli import (  # noqa: E402
+    DATASET_DEFAULTS,
+    DATASET_REGISTRY,
+    MODEL_CHOICES,
+    apply_dataset_overrides,
+    parse_kernel_sizes,
+)
 from src.energy_forecasting.models import BaselineConfig  # noqa: E402
 from src.energy_forecasting.training.early_stopping import EarlyStopping  # noqa: E402
 from src.energy_forecasting.training.ema import ModelEMA  # noqa: E402
 from src.energy_forecasting.training.lr_utils import WarmupScheduler  # noqa: E402
 from src.energy_forecasting.utils.logging import create_logger  # noqa: E402
-
-DATASET_REGISTRY = {
-    "ETTh1": (Dataset_ETT_hour, {"data_path": "ETTh1.csv", "freq": "h", "target": "OT"}),
-    "ETTh2": (Dataset_ETT_hour, {"data_path": "ETTh2.csv", "freq": "h", "target": "OT"}),
-    "ETTm1": (Dataset_ETT_minute, {"data_path": "ETTm1.csv", "freq": "15min", "target": "OT"}),
-    "ETTm2": (Dataset_ETT_minute, {"data_path": "ETTm2.csv", "freq": "15min", "target": "OT"}),
-    "ECL": (Dataset_Custom, {"data_path": "ECL.csv", "freq": "h", "target": "MT_320"}),
-    "WTH": (Dataset_Custom, {"data_path": "WTH.csv", "freq": "h", "target": "WetBulbCelsius"}),
-}
 
 
 def parse_args() -> argparse.Namespace:
@@ -38,36 +35,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-root", default="data", type=str, help="Directory containing CSV datasets.")
     parser.add_argument("--dataset", default="ETTh1", choices=DATASET_REGISTRY.keys())
     parser.add_argument("--features", default="M", choices=["S", "M", "MS"])
-    parser.add_argument("--seq-len", default=96, type=int)
-    parser.add_argument("--label-len", default=48, type=int)
-    parser.add_argument("--pred-len", default=24, type=int)
-    parser.add_argument("--batch-size", default=64, type=int)
-    parser.add_argument("--epochs", default=5, type=int)
+    parser.add_argument("--seq-len", default=336, type=int)
+    parser.add_argument("--label-len", default=168, type=int)
+    parser.add_argument("--pred-len", default=96, type=int)
+    parser.add_argument("--batch-size", default=32, type=int)
+    parser.add_argument("--epochs", default=10, type=int)
     parser.add_argument("--learning-rate", default=1e-3, type=float)
     parser.add_argument("--num-workers", default=2, type=int)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument(
         "--model",
         default="lstm",
-        choices=[
-            "lstm",
-            "tcn",
-            "transformer",
-            "fsnet",
-            "nomem",
-            "ncca",
-            "autoformer",
-            "dlinear",
-            "informer",
-            "patchtst",
-            "fedformer",
-        ],
+        choices=MODEL_CHOICES,
     )
-    parser.add_argument("--hidden-dim", default=128, type=int)
+    parser.add_argument("--hidden-dim", default=256, type=int)
     parser.add_argument("--num-layers", default=2, type=int)
     parser.add_argument("--dropout", default=0.1, type=float)
     parser.add_argument("--num-heads", default=4, type=int, help="Only used for transformer.")
-    parser.add_argument("--d-model", default=128, type=int, help="Only used for transformer.")
+    parser.add_argument("--d-model", default=256, type=int, help="Only used for transformer.")
     parser.add_argument("--ff-dim", default=256, type=int, help="Only used for transformer.")
     parser.add_argument("--pooling", default="last", choices=["last", "mean"], help="Transformer pooling strategy.")
     parser.add_argument("--tcn-levels", default=4, type=int, help="Only used for TCN.")
@@ -116,7 +101,23 @@ def parse_args() -> argparse.Namespace:
         type=float,
         help="If >0, maintain an exponential moving average of model weights for evaluation.",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--onenet-kernel-sizes",
+        default=(3, 5, 7),
+        type=parse_kernel_sizes,
+        help="Comma separated kernel sizes for OneNet's multiscale convolution blocks.",
+    )
+    parser.add_argument(
+        "--onenet-activation",
+        default="gelu",
+        choices=["relu", "gelu", "silu"],
+        help="Activation function used inside OneNet blocks.",
+    )
+    args = parser.parse_args()
+
+    apply_dataset_overrides(args, parser, DATASET_DEFAULTS)
+
+    return args
 
 
 def build_dataloaders(args: argparse.Namespace):
@@ -190,9 +191,11 @@ def evaluate(model, loader, criterion, device, pred_len, ema=None):
     if ema is not None:
         ema.apply_shadow(model)
         ema_applied = True
-    total_loss = 0.0
-    total_mae = 0.0
-    total_samples = 0
+    total_squared_error = 0.0
+    total_abs_error = 0.0
+    total_mape_error = 0.0
+    total_mape_count = 0
+    total_elements = 0
     for batch in loader:
         seq_x, seq_y, _, _ = batch
         seq_x = torch.as_tensor(seq_x, dtype=torch.float32, device=device)
@@ -200,17 +203,26 @@ def evaluate(model, loader, criterion, device, pred_len, ema=None):
 
         output = model(seq_x)
         loss = criterion(output, target)
-        mae = torch.mean(torch.abs(output - target))
+        diff = output - target
+        batch_elements = target.numel()
+        total_squared_error += loss.item() * batch_elements
+        total_abs_error += torch.sum(torch.abs(diff)).item()
+        total_elements += batch_elements
 
-        batch_size = seq_x.size(0)
-        total_loss += loss.item() * batch_size
-        total_mae += mae.item() * batch_size
-        total_samples += batch_size
+        denom = torch.abs(target)
+        mape_mask = denom > 1e-5
+        if torch.any(mape_mask):
+            total_mape_error += torch.sum(torch.abs(diff[mape_mask]) / denom[mape_mask]).item()
+            total_mape_count += int(mape_mask.sum().item())
 
     if ema_applied:
         ema.restore(model)
-    denom = max(total_samples, 1)
-    return total_loss / denom, total_mae / denom
+    denom = max(total_elements, 1)
+    mse = total_squared_error / denom
+    mae = total_abs_error / denom
+    rmse = mse ** 0.5
+    mape = total_mape_error / max(total_mape_count, 1)
+    return mse, mae, rmse, mape
 
 
 def build_scheduler(optimizer: torch.optim.Optimizer, args: argparse.Namespace):
@@ -287,6 +299,8 @@ def main() -> None:
         patch_len=args.patch_len,
         freq_top_k=args.freq_top_k,
         rep_dim=args.rep_dim,
+        onenet_kernel_sizes=args.onenet_kernel_sizes,
+        onenet_activation=args.onenet_activation,
     )
     model = model_config.build().to(args.device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
@@ -325,7 +339,7 @@ def main() -> None:
             grad_clip_norm=args.grad_clip_norm,
             ema=ema,
         )
-        val_loss, val_mae = evaluate(
+        val_loss, val_mae, val_rmse, val_mape = evaluate(
             model,
             val_loader,
             criterion,
@@ -334,11 +348,13 @@ def main() -> None:
             ema=ema,
         )
         logger.info(
-            "Epoch %02d | train_loss=%.4f | val_loss=%.4f | val_mae=%.4f",
+            "Epoch %02d | train_loss=%.4f | val_loss=%.4f | val_mae=%.4f | val_rmse=%.4f | val_mape=%.4f",
             epoch,
             train_loss,
             val_loss,
             val_mae,
+            val_rmse,
+            val_mape,
         )
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -361,8 +377,16 @@ def main() -> None:
             model.load_state_dict(best_state, strict=False)
         else:
             model.load_state_dict(best_state)
-    test_loss, test_mae = evaluate(model, test_loader, criterion, args.device, args.pred_len)
-    logger.info("Test metrics | loss=%.4f | mae=%.4f", test_loss, test_mae)
+    test_loss, test_mae, test_rmse, test_mape = evaluate(
+        model, test_loader, criterion, args.device, args.pred_len
+    )
+    logger.info(
+        "Test metrics | loss=%.4f | mae=%.4f | rmse=%.4f | mape=%.4f",
+        test_loss,
+        test_mae,
+        test_rmse,
+        test_mape,
+    )
 
 
 if __name__ == "__main__":
