@@ -1,6 +1,5 @@
 import argparse
 import copy
-import sys
 from pathlib import Path
 
 import torch
@@ -9,56 +8,17 @@ from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR, ReduceLROnPlateau, StepLR
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.append(str(ROOT))
-SRC_ROOT = ROOT / "src"
-if str(SRC_ROOT) not in sys.path:
-    sys.path.append(str(SRC_ROOT))
-
-from data.data_loader import Dataset_ETT_hour, Dataset_ETT_minute, Dataset_Custom  # noqa: E402
+from scripts._cli_utils import (  # noqa: E402
+    DATASET_DEFAULTS,
+    DATASET_REGISTRY,
+    apply_dataset_defaults,
+    parse_kernel_sizes,
+)
 from src.energy_forecasting.models import BaselineConfig  # noqa: E402
 from src.energy_forecasting.training.early_stopping import EarlyStopping  # noqa: E402
 from src.energy_forecasting.training.ema import ModelEMA  # noqa: E402
 from src.energy_forecasting.training.lr_utils import WarmupScheduler  # noqa: E402
 from src.energy_forecasting.utils.logging import create_logger  # noqa: E402
-
-DATASET_REGISTRY = {
-    "ETTh1": (Dataset_ETT_hour, {"data_path": "ETTh1.csv", "freq": "h", "target": "OT"}),
-    "ETTh2": (Dataset_ETT_hour, {"data_path": "ETTh2.csv", "freq": "h", "target": "OT"}),
-    "ETTm1": (Dataset_ETT_minute, {"data_path": "ETTm1.csv", "freq": "15min", "target": "OT"}),
-    "ETTm2": (Dataset_ETT_minute, {"data_path": "ETTm2.csv", "freq": "15min", "target": "OT"}),
-    "ECL": (Dataset_Custom, {"data_path": "ECL.csv", "freq": "h", "target": "MT_320"}),
-    "WTH": (Dataset_Custom, {"data_path": "WTH.csv", "freq": "h", "target": "WetBulbCelsius"}),
-}
-
-DATASET_DEFAULTS = {
-    "ETTh1": {
-        "seq_len": 336,
-        "label_len": 168,
-        "pred_len": 96,
-        "learning_rate": 1e-3,
-        "d_model": 256,
-    },
-    "ETTh2": {
-        "seq_len": 336,
-        "label_len": 168,
-        "pred_len": 96,
-        "learning_rate": 1e-3,
-        "d_model": 256,
-    },
-}
-
-
-def _parse_kernel_sizes(value: str) -> tuple[int, ...]:
-    try:
-        items = [int(part.strip()) for part in value.split(",") if part.strip()]
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError("Kernel sizes must be comma-separated integers") from exc
-    if not items:
-        raise argparse.ArgumentTypeError("At least one kernel size must be provided")
-    return tuple(items)
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train baseline forecasters (LSTM/TCN/Transformer) on energy datasets.")
@@ -147,7 +107,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--onenet-kernel-sizes",
         default=(3, 5, 7),
-        type=_parse_kernel_sizes,
+        type=parse_kernel_sizes,
         help="Comma separated kernel sizes for OneNet's multiscale convolution blocks.",
     )
     parser.add_argument(
@@ -158,14 +118,7 @@ def parse_args() -> argparse.Namespace:
     )
     args = parser.parse_args()
 
-    dataset_defaults = DATASET_DEFAULTS.get(args.dataset)
-    if dataset_defaults is not None:
-        for key, value in dataset_defaults.items():
-            default_value = parser.get_default(key)
-            if getattr(args, key) == default_value:
-                setattr(args, key, value)
-
-    return args
+    return apply_dataset_defaults(parser, args)
 
 
 def build_dataloaders(args: argparse.Namespace):
