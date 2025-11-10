@@ -12,7 +12,7 @@ from torch.nn.utils import clip_grad_norm_
 from torch.optim.lr_scheduler import CosineAnnealingLR, ReduceLROnPlateau, StepLR
 from torch.utils.data import DataLoader
 
-from scripts._cli_utils import (  # noqa: E402
+from _cli_utils import (  # noqa: E402
     DATASET_DEFAULTS,
     DATASET_REGISTRY,
     apply_dataset_defaults,

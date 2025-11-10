@@ -19,7 +19,7 @@ from src.energy_forecasting.utils.detector import STEPD  # noqa: E402
 from src.energy_forecasting.utils.buffer import Buffer  # noqa: E402
 from src.energy_forecasting.utils.logging import create_logger  # noqa: E402
 
-from scripts._cli_utils import (  # noqa: E402
+from _cli_utils import (  # noqa: E402
     DATASET_DEFAULTS,
     DATASET_REGISTRY,
     apply_dataset_defaults,
